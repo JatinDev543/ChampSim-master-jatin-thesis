@@ -1,0 +1,1 @@
+/home/jatindev/Thesis/ChampSim-master/hetro.sh

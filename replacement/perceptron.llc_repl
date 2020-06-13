@@ -1,0 +1,555 @@
+#include "cache.h"
+#include <cstdlib>
+#include <ctime>
+#include <assert.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <math.h>
+#include <sys/mman.h>
+#include <map>
+#include <iostream>
+#include <bits/stdc++.h> 
+
+typedef unsigned long long int UINT64;
+typedef long long int INT64;
+typedef unsigned int UINT32;
+typedef int INT32;
+typedef unsigned long long int COUNTER;
+typedef unsigned long long int Addr_t;
+
+#define SAMPLER_SET (256*NUM_CPUS)
+#define SAMPLER_WAY LLC_WAY
+#define NUM_FEATURES 6  // number of features
+#define NUM_WEIGHTS 256 // number of weughts per table
+#define MAX_WEIGHT 31   // maximum weight value
+#define MIN_WEIGHT -32  // minimum weight value
+
+#define THETA 15     // training threshold
+#define TAU_BYPASS 170  // bypass threshold
+#define TAU_REPLACE 0 // reuse threshold
+
+struct Features
+{
+  bitset<8> PC_0; //0th pc
+  bitset<8> PC_1; //1st pc
+  bitset<8> PC_2; //2nd pc
+  bitset<8> PC_3; //3rd pc
+  bitset<8> tag_rs_4; //4 bits of tag
+  bitset<8> tag_rs_7; //7 bits of tag
+};
+
+long int bypass=0;
+long int reuse=0;
+long int train_inc=0;
+long int train_dec=0;
+int predict(const Features &);
+void train(const Features &, bool );
+int get_LRU_index(const int );
+void update_LRU_state(const int , const int );
+void update_PCs(const Addr_t );
+uint32_t is_it_sampled(uint32_t );
+void llc_replacement_final_stats();
+struct Features compute_features(const Addr_t , const Addr_t , const bool );
+// temp  sampler structure
+
+// temp  sampler structure
+class SAMPLER_class
+{
+  public:  
+  bool valid;
+  bitset<4> lru;
+  Features features;
+  int y_out;
+  Addr_t partial_tag;
+   SAMPLER_class() {
+        valid = false;
+        features.PC_0 = 0;
+        features.PC_1 = 0;
+        features.PC_2 = 0;
+        features.PC_3= 0;
+        features.tag_rs_4 = 0;
+        features.tag_rs_7 = 0;
+        y_out = 0;
+        partial_tag = 0;
+        lru = 0;
+    };
+
+  //valid
+  //lru
+  //features
+  //y_out
+  //partial_tag
+}; // Jimenez's structures
+
+uint32_t rand_sets[SAMPLER_SET];
+SAMPLER_class sampler[SAMPLER_SET][SAMPLER_WAY];
+int **weight_table;
+Addr_t pc_hist[4];
+
+// initialize replacement state
+void CACHE::llc_initialize_replacement()
+{
+   
+ // cout << " in Initialize perceptron state" << endl;
+
+   //initialize true lru
+
+   // initialize sampler
+
+    for (int i=0; i<SAMPLER_SET; i++) {
+        for (int j=0; j<SAMPLER_WAY; j++) {
+            sampler[i][j].lru = j;
+            sampler[i][j].partial_tag = 0;
+            sampler[i][j].valid = false;
+            sampler[i][j].y_out = 0;
+            sampler[i][j].features.PC_0 = 0;
+            sampler[i][j].features.PC_1 = 0;
+            sampler[i][j].features.PC_2 = 0;
+            sampler[i][j].features.PC_3 = 0;
+            sampler[i][j].features.tag_rs_4 = 0;
+            sampler[i][j].features.tag_rs_7 = 0;
+        }
+    }
+
+    srand(time(NULL));
+    unsigned long rand_seed = 1;
+    unsigned long max_rand = 1048576;
+    uint32_t my_set = LLC_SET;
+    int do_again = 0;
+    for (int i=0; i<SAMPLER_SET; i++)
+    {
+        do 
+        {
+            do_again = 0;
+            rand_seed = rand_seed * 1103515245 + 12345;
+            rand_sets[i] = ((unsigned) ((rand_seed/65536) % max_rand)) % my_set;
+            printf("Assign rand_sets[%d]: %u  LLC: %u\n", i, rand_sets[i], my_set);
+            for (int j=0; j<i; j++) 
+            {
+                if (rand_sets[i] == rand_sets[j]) 
+                {
+                    do_again = 1;
+                    break;
+                }
+            }
+        } while (do_again);
+        printf("rand_sets[%d]: %d\n", i, rand_sets[i]);
+    }
+
+     // Initialize the weight tables
+    weight_table = new int *[NUM_FEATURES];
+    for (int i = 0; i < NUM_FEATURES; i++)
+    {
+        weight_table[i] = new int[NUM_WEIGHTS];
+        for (int j = 0; j < NUM_WEIGHTS; j++)
+        {
+            weight_table[i][j] = 0;
+        }
+    }
+
+    // Initialize the PC history
+    for (int i = 0; i < 4; i++)
+    {
+        pc_hist[i] = 0;
+    }
+   // cout << " out Initialize perceptron state" << endl;
+
+}
+
+void update_PCs(const Addr_t current_PC)
+{  //cout<<"in update_pc"<<endl;
+    for (int i = 3; i > 0; i--)
+        pc_hist[i] = pc_hist[i - 1];
+
+    pc_hist[0] = current_PC;
+     //cout<<"out update_pc"<<endl;
+}
+
+uint32_t is_it_sampled(uint32_t set)
+{
+     //cout<<"in is_it_sampled"<<endl;
+    for (int i=0; i<SAMPLER_SET; i++)
+        if (rand_sets[i] == set)
+            return i;
+     //cout<<"out is_it_sampled"<<endl;
+    return SAMPLER_SET;
+}
+
+Features compute_features(const Addr_t PC, const Addr_t address, const bool PC_is_updated)
+{
+     // cout<<"in compute_features"<<endl;
+    Features current_features;
+    Addr_t PCs[4];
+    // if PC is already updated we do not need to shift new PC
+    PCs[0] = (PC_is_updated ? pc_hist[0] : PC);
+    PCs[1] = (PC_is_updated ? pc_hist[1] : pc_hist[0]);
+    PCs[2] = (PC_is_updated ? pc_hist[2] : pc_hist[1]);
+    PCs[3] = (PC_is_updated ? pc_hist[3] : pc_hist[2]);
+
+    Addr_t mask_8 = ((1 << 8) - 1); // mask to extract 8 bits
+
+    current_features.PC_0 = ((PCs[0] >> 2) ^ PC) & mask_8; // feature 1
+    current_features.PC_1 = ((PCs[1] >> 1) ^ PC) & mask_8; // feature 2
+    current_features.PC_2 = ((PCs[2] >> 2) ^ PC) & mask_8; // feature 3
+    current_features.PC_3 = ((PCs[3] >> 3) ^ PC) & mask_8; // feature 4
+    
+    // Get the tag from the address
+    int num_index_bits = log2(LLC_SET);
+    int num_offset_bits = log2(64);
+    Addr_t tag = (address >> (num_index_bits + num_offset_bits)); // otherwise find tag from address
+
+    current_features.tag_rs_4 = ((tag >> 4) ^ PC) & mask_8; // feature 5
+    current_features.tag_rs_7 = ((tag >> 7) ^ PC) & mask_8; // feature 6
+    //cout<<"out compute_features"<<endl;
+    return current_features;
+}
+
+
+// update sampler
+void CACHE::update_sample(uint32_t cpu, uint32_t set, uint64_t address, uint64_t ip, uint8_t type,INT32 updateWayID, uint8_t  cachehit)
+{
+     //cout<<"in update_sample"<<endl;
+    uint64_t tag = address / (64*LLC_SET); 
+    int match = -1;  
+   // update the PC recency stack
+    update_PCs(ip);
+    // compute current features
+    Features features = compute_features(ip, address, true);
+    uint32_t s_idx = is_it_sampled(set);
+    bool block_exists; 
+    int index = (set / (LLC_SET / SAMPLER_SET));  
+    if (s_idx < SAMPLER_SET)
+     //check to see if current set is a sampler set
+     {
+           
+            block_exists = false;
+             for (int i = 0; i < SAMPLER_WAY; i++)                                           // check if entry exists for current tag
+            {
+            if ((sampler[index][i].partial_tag == tag) && (sampler[index][i].valid)) // there was a match
+            {
+                if (sampler[index][i].y_out > (-THETA) || block[index][updateWayID].reuse_bit != cachehit) // train if greater than (-theta)
+                {
+                    train(sampler[index][i].features, false);            
+                                             // train predictor on decrement
+                }
+
+                block_exists = true;
+                sampler[index][i].features = features;                                                // update the features
+                lru_update(index, i);
+            }                                                                                 // update the LRU state
+                sampler[index][i].y_out = predict(sampler[index][i].features); // get prediction on new features
+                break;
+            }
+
+        if (!block_exists) // there was no match; eviction required in sampler
+        {
+            int way = -1;
+
+            //look for an invalid block
+            for (unsigned int i = 0; i < SAMPLER_WAY; i++)
+            {
+                if (sampler[index][i].valid == false)
+                {
+                    way = i;
+                    break;
+                }
+             }   
+           
+            // if not found, search for dead block within the sampler
+        if (way == -1)
+            {
+                for (unsigned int i = 0; i < SAMPLER_WAY; i++)
+                {
+                    if (sampler[index][i].y_out > TAU_REPLACE)
+                    {
+                        way = i;
+                        break;
+                    }
+                }
+            }
+
+            // if not found, use LRU to find the eviction candidate
+            if (way == -1)
+                way = get_LRU_index(index);
+
+            // train if sampler block y_out is less than theta or if prediction was incorrect
+            if (sampler[index][way].y_out < THETA || block[index][updateWayID].reuse_bit != cachehit)
+            {
+                train(sampler[index][way].features, true); // train on increment
+              
+            }
+
+            sampler[index][way].partial_tag = tag;
+            sampler[index][way].features = features;                                // update the features
+            update_LRU_state(index, way);                                                // update the LRU state
+            sampler[index][way].y_out = predict(sampler[index][way].features); // get prediction on new features
+            sampler[index][way].valid = true;     
+            }                                  // set valid bit
+        }
+               // there was no match; eviction required in sampler
+               // train if sampler block y_out is less than theta or if prediction was incorrect
+
+                // update the features
+                // update the LRU state
+                // get prediction on new features
+                // set valid bit
+
+          // update PLRU state
+    lru_update(set, updateWayID);
+    // set reuse bit
+    int y_out = predict(features);
+    if(y_out< TAU_REPLACE)
+    {
+          block[set][updateWayID].reuse_bit = true; 
+          reuse++;
+    }
+    else
+    {
+         block[set][updateWayID].reuse_bit = false; 
+    }
+   // cout<<"out update_sample"<<endl;
+    
+}
+// find replacement victim
+uint32_t CACHE::llc_find_victim(uint32_t cpu, uint64_t instr_id, uint32_t set, const BLOCK *current_set, uint64_t ip, uint64_t full_addr, uint32_t type)
+{
+     //cout<<"llc_find_victim"<<endl;
+    //return lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type); 
+    int way = 0;
+    // Compute current features
+    Features current_features = compute_features(ip, full_addr, false);
+
+    // Predict using current features
+    int prediction_output = predict(current_features);
+
+    if ((prediction_output > TAU_BYPASS)&&(type != WRITEBACK)) //bypass if reuse prediction is false
+    {
+        update_PCs(ip); // update the PC recency stack
+        way = LLC_WAY;       // set way to -1
+        bypass++;  
+        
+    }
+    else // if reuse prediction is true; i.e do not bypass
+    {
+        bool found_dead = false;
+        //search the set for a dead block
+        for (unsigned int i = 0; i < LLC_WAY; i++)
+        {
+            if (block[set][i].reuse_bit == false)
+            {
+                found_dead = true;
+                way = i; // return the way with the dead block
+                break;
+            }
+        }
+
+        if (!found_dead) // if no dead block was found, evict using PseudoLRU
+        {
+            way = lru_victim(cpu, instr_id, set, current_set, ip, full_addr, type);
+        }
+    }
+    //cout<<"out llc_find_victim"<<endl;
+    //cout<<"way "<<way<<endl;
+    return way;  
+
+    // WE SHOULD NOT REACH HERE
+    assert(0);
+    return 0;
+}
+
+
+int predict(const Features &features)
+{
+     //cout<<"in predict"<<endl;
+    int perceptron_output = 0;
+    perceptron_output += weight_table[0][features.PC_0.to_ulong()];
+    perceptron_output += weight_table[1][features.PC_1.to_ulong()];
+    perceptron_output += weight_table[2][features.PC_2.to_ulong()];
+    perceptron_output += weight_table[3][features.PC_3.to_ulong()];
+    perceptron_output += weight_table[4][features.tag_rs_4.to_ulong()];
+    perceptron_output += weight_table[5][features.tag_rs_7.to_ulong()];
+    //cout<<"out predict"<<endl;
+    return perceptron_output;
+}
+
+void train(const Features &features, bool increment)
+{
+     //cout<<"train"<<endl;
+    if (increment == false)
+    {
+       // cout<<"decrement"<<endl;
+        int wt_1 = weight_table[0][features.PC_0.to_ulong()];
+        weight_table[0][features.PC_0.to_ulong()] = (wt_1 > MIN_WEIGHT ? --wt_1 : MIN_WEIGHT);
+        // if(weight_table[0][features.PC_0.to_ulong()]!=0) 
+        // {
+        // cout<<"0th entry  "<<weight_table[0][features.PC_0.to_ulong()]<<endl;
+        // }
+        //cout<<"after 1st"<<endl;
+
+        int wt_2 = weight_table[1][features.PC_1.to_ulong()];
+        weight_table[1][features.PC_1.to_ulong()] = (wt_2 > MIN_WEIGHT ? --wt_2 : MIN_WEIGHT);
+          //cout<<"after 2nd"<<endl;
+        // if(weight_table[1][features.PC_1.to_ulong()]!=0)
+        // { 
+        // cout<<"1th entry  "<<weight_table[1][features.PC_1.to_ulong()]<<endl;
+        // } 
+        int wt_3 = weight_table[2][features.PC_2.to_ulong()];
+        weight_table[2][features.PC_2.to_ulong()] = (wt_3 > MIN_WEIGHT ? --wt_3 : MIN_WEIGHT);
+          //cout<<"after 3rd"<<endl;
+    //     if(weight_table[2][features.PC_2.to_ulong()]!=0)
+    //    {
+    //     cout<<"2nd entry  "<<weight_table[2][features.PC_2.to_ulong()]<<endl;
+    //    }
+        int wt_4 = weight_table[3][features.PC_3.to_ulong()];
+        weight_table[3][features.PC_3.to_ulong()] = (wt_4 > MIN_WEIGHT ? --wt_4 : MIN_WEIGHT);
+            // cout<<"after 4th"<<endl;
+        //  if(weight_table[3][features.PC_3.to_ulong()]!=0)
+        // cout<<"3rd entry  "<<weight_table[3][features.PC_3.to_ulong()]<<endl;
+
+        int wt_5 = weight_table[4][features.tag_rs_4.to_ulong()];
+        weight_table[4][features.tag_rs_4.to_ulong()] = (wt_5 > MIN_WEIGHT ? --wt_5 : MIN_WEIGHT);
+             //cout<<"after 5th"<<endl;
+        // if(weight_table[4][features.tag_rs_4.to_ulong()]!=0)
+        // cout<<"4th entry  "<<weight_table[4][features.tag_rs_4.to_ulong()]<<endl;
+
+        int wt_6 = weight_table[5][features.tag_rs_7.to_ulong()];
+        weight_table[5][features.tag_rs_7.to_ulong()] = (wt_6 > MIN_WEIGHT ? --wt_6 : MIN_WEIGHT);
+             //cout<<"after 6th"<<endl;
+        // if(weight_table[5][features.tag_rs_7.to_ulong()]!=0)
+        // cout<<"5th entry  "<<weight_table[5][features.tag_rs_7.to_ulong()]<<endl;
+        train_dec++;
+   }
+    else if (increment)
+    {
+
+        //cout<<"increment"<<endl;
+        int wt_1 = weight_table[0][features.PC_0.to_ulong()];
+        weight_table[0][features.PC_0.to_ulong()] = (wt_1 < MAX_WEIGHT ? ++wt_1 : MAX_WEIGHT);
+        // cout<<"after 1st"<<endl;
+        //  if(weight_table[0][features.PC_0.to_ulong()]!=0) 
+        //  cout<<"0th entry  "<<weight_table[0][features.PC_0.to_ulong()]<<endl;
+
+        int wt_2 = weight_table[1][features.PC_1.to_ulong()];
+        weight_table[1][features.PC_1.to_ulong()] = (wt_2 < MAX_WEIGHT ? ++wt_2 : MAX_WEIGHT);
+        //cout<<"after 2nd"<<endl;
+        //  if(weight_table[1][features.PC_1.to_ulong()]!=0)
+        // cout<<"1th entry  "<<weight_table[1][features.PC_1.to_ulong()]<<endl;
+
+        int wt_3 = weight_table[2][features.PC_2.to_ulong()];
+        weight_table[2][features.PC_2.to_ulong()] = (wt_3 < MAX_WEIGHT ? ++wt_3 : MAX_WEIGHT);
+        //cout<<"after 3rd"<<endl;
+        //  if(weight_table[2][features.PC_2.to_ulong()]!=0)
+        // cout<<"2nd entry  "<<weight_table[2][features.PC_2.to_ulong()]<<endl;
+
+        int wt_4 = weight_table[3][features.PC_3.to_ulong()];
+        weight_table[3][features.PC_3.to_ulong()] = (wt_4 < MAX_WEIGHT ? ++wt_4 : MAX_WEIGHT);
+         //cout<<"after 4th"<<endl;
+        //  if(weight_table[3][features.PC_3.to_ulong()]!=0)
+        // cout<<"3rd entry  "<<weight_table[3][features.PC_3.to_ulong()]<<endl;
+
+        int wt_5 = weight_table[4][features.tag_rs_4.to_ulong()];
+        weight_table[4][features.tag_rs_4.to_ulong()] = (wt_5 < MAX_WEIGHT ? ++wt_5 : MAX_WEIGHT);
+           // cout<<"after 5th"<<endl;
+        //  if(weight_table[4][features.tag_rs_4.to_ulong()]!=0)
+        // cout<<"4th entry  "<<weight_table[4][features.tag_rs_4.to_ulong()]<<endl;
+
+        int wt_6 = weight_table[5][features.tag_rs_7.to_ulong()];
+        weight_table[5][features.tag_rs_7.to_ulong()] = (wt_6 < MAX_WEIGHT ? ++wt_6 : MAX_WEIGHT);
+         //cout<<"after 6th"<<endl;
+        //  if(weight_table[5][features.tag_rs_7.to_ulong()]!=0)
+        // cout<<"5th entry  "<<weight_table[5][features.tag_rs_7.to_ulong()]<<endl;
+        train_inc++;
+    
+   }
+   //  cout<<"out train"<<endl;
+}
+
+// called on every cache hit and cache fill
+void CACHE::llc_update_replacement_state(uint32_t cpu, uint32_t set, uint32_t way, uint64_t full_addr, uint64_t ip, uint64_t victim_addr, uint32_t type, uint8_t hit)
+{
+     //cout<<"in llc_update_replacement_state"<<endl;
+    if (type == WRITEBACK) {
+        if (hit) // wrietback hit does not update LRU state
+            return;
+    }
+
+    string TYPE_NAME;
+    if (type == LOAD)
+        TYPE_NAME = "LOAD";
+    else if (type == RFO)
+        TYPE_NAME = "RFO";
+    else if (type == PREFETCH)
+        TYPE_NAME = "PF";
+    else if (type == WRITEBACK)
+        TYPE_NAME = "WB";
+    else  
+        assert(0);
+
+    if (hit)
+        TYPE_NAME += "_HIT";
+    else
+        TYPE_NAME += "_MISS";
+
+    if ((type == WRITEBACK) && ip)
+        assert(0);
+
+    //cout << "CPU: " << cpu << "  LLC " << setw(9) << TYPE_NAME << " set: " << setw(5) << set << " way: " << setw(2) << way;
+    //cout << hex << " paddr: " << setw(12) << full_addr << " ip: " << setw(8) << ip << " victim_addr: " << victim_addr << dec << endl;
+    // handle writeback access
+    // update sampler
+    update_sample(cpu, set, full_addr, ip, type,way,hit);
+
+     //cout<<"out llc_update_replacement_state"<<endl;
+
+}
+int get_LRU_index(const int index)
+{  
+     //cout<<"in get_lru_index"<<endl;
+    int way = 0;
+    for (int i = 0; i < SAMPLER_WAY; i++)
+    {
+        if (sampler[index][i].lru.to_ulong() == SAMPLER_WAY - 1)
+        {
+            way = i;
+            break;
+        }
+    }
+
+     //cout<<"out get_lru_index"<<endl;
+
+    return way;
+}
+
+void update_LRU_state(const int index, const int way)
+{
+    //cout<<"in update_lru_state"<<endl;
+    unsigned int lru_position = sampler[index][way].lru.to_ulong();
+
+    for (int i = 0; i < SAMPLER_WAY; i++)
+    {
+        if (sampler[index][i].lru.to_ulong() < lru_position)
+            sampler[index][i].lru = sampler[index][i].lru.to_ulong() + 1;
+    }
+
+    sampler[index][way].lru = 0;
+    //cout<<"out update_lru_state"<<endl;
+}
+void CACHE ::llc_replacement_final_stats()
+{
+    //cout<<"in llc_replacement_final_stats"<<endl;
+    cout<<"number of bypass "<<bypass<<endl;
+    cout<<" "<<reuse<<endl;
+    cout<<"train "<<train_inc<<endl;
+    cout<<"train "<<train_dec<<endl;
+    for (int i = 0; i < NUM_FEATURES; i++)
+    {   cout<<i<<"th weight table"<<endl;
+        for (int j = 0; j < NUM_WEIGHTS; j++)
+        {
+            cout<<weight_table[i][j]<<"  ";
+        }
+        cout<<endl;
+    }
+  //cout<<"out llc_replacement_final_stats"<<endl;
+}
+

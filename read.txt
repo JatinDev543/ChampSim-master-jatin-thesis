@@ -1,0 +1,3 @@
+b=2;
+a=$(sed "$bq;d" traces);echo $a;
+
