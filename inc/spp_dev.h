@@ -31,7 +31,7 @@
 #define C_DELTA_BIT 4
 #define C_SIG_MAX ((1 << C_SIG_BIT) - 1)
 #define C_DELTA_MAX ((1 << C_DELTA_BIT) - 1)
-
+//change thresholds
 #define FILL_THRESHOLD 90
 #define PF_THRESHOLD 25
 
@@ -104,10 +104,12 @@ class PATTERN_TABLE {
     }
 
     void update_pattern(uint32_t last_sig, int curr_delta),
-
-//read_pattern(uint64_t base_addr,uint32_t curr_sig, int *prefetch_delta, uint32_t *confidence_q, uint32_t &lookahead_way, uint32_t &lookahead_conf, uint32_t &pf_q_tail, uint32_t &depth );};//
+//for SPP
+read_pattern(uint64_t base_addr,uint32_t curr_sig, int *prefetch_delta, uint32_t *confidence_q, uint32_t &lookahead_way, uint32_t &lookahead_conf, uint32_t &pf_q_tail, uint32_t &depth );};//
+//for highbw
 //read_pattern(uint64_t base_addr,uint32_t curr_sig, int *prefetch_delta, uint32_t *confidence_q, uint32_t &lookahead_way, uint32_t &lookahead_conf, uint32_t &pf_q_tail, uint32_t &depth,uint64_t pq_occupency,uint64_t pq_size,uint64_t mshr_occupency,uint64_t mshr_size,uint64_t ms,uint64_t Cachehit,int);};
-read_pattern(uint64_t base_addr,uint32_t curr_sig, int *prefetch_delta, uint32_t *confidence_q, uint32_t &lookahead_way, uint32_t &lookahead_conf, uint32_t &pf_q_tail, uint32_t &depth,uint64_t pq_occupency,uint64_t pq_size,uint64_t mshr_occupency,uint64_t mshr_size,uint64_t ms,uint64_t Cachehit);};
+//for less bw
+//read_pattern(uint64_t base_addr,uint32_t curr_sig, int *prefetch_delta, uint32_t *confidence_q, uint32_t &lookahead_way, uint32_t &lookahead_conf, uint32_t &pf_q_tail, uint32_t &depth,uint64_t pq_occupency,uint64_t pq_size,uint64_t mshr_occupency,uint64_t mshr_size,uint64_t ms,uint64_t Cachehit);};
 class PREFETCH_FILTER {
   public:
     uint64_t remainder_tag[FILTER_SET];

@@ -1003,8 +1003,11 @@ int main(int argc, char** argv)
                                      }
           
 
+                  //for parallel workloads
+                 //double IP_C=(IP[0]+IP[1]+IP[2]+IP[3])/4;  //calculate IPC for multi core.                                          
+                // fout1<<IP_C<<" "<<IP[0]<<" "<<IP[1]<<" "<<IP[2]<<" "<<IP[3]<<" "<<acc<<" "<<ooo_cpu[0].L2C.roi_access[0][2]<<" "<<uncore.LLC.roi_access[0][2]<<" "<<" "<<" "<<total_hit<<" "<<total_prefetch<<" "<<L2C_prefetch<<" "<<L2C_hit<<" "<<LLC_prefetch<<" "<<LLC_hit<<" "<<OLLC_prefetch<<" "<<t<<" "<<h<<" "<<m<<" "<<tl<<" "<<hl<<" "<<ml<<" "<<critical_delay;
 
-                 //double IP_C=(IP[0]+IP[1]+IP[2]+IP[3])/4;  //calculate IPC for multi core.
+                 //for single core workloads
                  fout1<<IP[0]<<" "<<acc<<" "<<ooo_cpu[0].L2C.roi_access[0][2]<<" "<<uncore.LLC.roi_access[0][2]<<" "<<" "<<" "<<total_hit<<" "<<total_prefetch<<" "<<L2C_prefetch<<" "<<L2C_hit<<" "<<LLC_prefetch<<" "<<LLC_hit<<" "<<OLLC_prefetch<<" "<<t<<" "<<h<<" "<<m<<" "<<tl<<" "<<hl<<" "<<ml<<" "<<critical_delay;
                 //    for(int m=0;m<4;m++)
                 //    {

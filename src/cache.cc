@@ -29,26 +29,26 @@ double OLLC_hit=0;
 double total_prefetch=0;
 double total_hit=0;
 //extern int exist1(uint64_t);
-extern int exist(uint64_t);
+//extern int exist(uint64_t);
 
-// int exist(uint64_t ip)
-// {
+int exist(uint64_t ip)
+{
    
-// //    cout<<"exist in"<<endl;
-//    auto it=ip_lru.begin(); 
-//    while(it!=ip_lru.end())
-//    {
-//       if(it->first==ip) 
-//       { 
-//         //    cout<<"diff of found ip in table "<<it->second<<endl; 
-//            return it->second;
-//        }
-//       it++;  
-//    }
-//     // cout<<"exist out"<<endl;
-//    return -1; 
+//    cout<<"exist in"<<endl;
+   auto it=ip_lru.begin(); 
+   while(it!=ip_lru.end())
+   {
+      if(it->first==ip) 
+      { 
+        //    cout<<"diff of found ip in table "<<it->second<<endl; 
+           return it->second;
+       }
+      it++;  
+   }
+    // cout<<"exist out"<<endl;
+   return -1; 
 
-// }
+}
 
 
 void CACHE::handle_fill()
@@ -523,8 +523,8 @@ void CACHE::handle_read()
 		if (RQ.entry[index].type == LOAD) {
                     if (cache_type == IS_L1D) 
 		      l1d_prefetcher_operate(RQ.entry[index].full_addr, RQ.entry[index].ip, 1, RQ.entry[index].type);
-          else if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )
-              //   else  if (cache_type == IS_L2C)
+          else if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )            //----------for critical address                    
+              //   else  if (cache_type == IS_L2C)                                    //----------for all address 
 		      l2c_prefetcher_operate(block[set][way].address<<LOG2_BLOCK_SIZE, RQ.entry[index].ip, 1, RQ.entry[index].type, 0);
                     else if (cache_type == IS_LLC)
 		      {
@@ -733,8 +733,8 @@ void CACHE::handle_read()
 		    if (RQ.entry[index].type == LOAD) {
                         if (cache_type == IS_L1D) 
                             l1d_prefetcher_operate(RQ.entry[index].full_addr, RQ.entry[index].ip, 0, RQ.entry[index].type);
-                   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1)
-               // else  if (cache_type == IS_L2C)
+                   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1)        //----for critical addresses
+               // else  if (cache_type == IS_L2C)                                          //----for all addresses  
 			  l2c_prefetcher_operate(RQ.entry[index].address<<LOG2_BLOCK_SIZE, RQ.entry[index].ip, 0, RQ.entry[index].type, 0);
                         if (cache_type == IS_LLC)
 			  {
@@ -791,8 +791,8 @@ void CACHE::handle_prefetch()
 		  {
 		    if (cache_type == IS_L1D)
 		      l1d_prefetcher_operate(PQ.entry[index].full_addr, PQ.entry[index].ip, 1, PREFETCH);
-                   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )
-                  // else  if (cache_type == IS_L2C)
+                   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )          //-----for critical addresses
+                  // else  if (cache_type == IS_L2C)                                          //-----for all addresses 
                       PQ.entry[index].pf_metadata = l2c_prefetcher_operate(block[set][way].address<<LOG2_BLOCK_SIZE, PQ.entry[index].ip, 1, PREFETCH, PQ.entry[index].pf_metadata);
                     else if (cache_type == IS_LLC)
 		      {
@@ -872,8 +872,8 @@ void CACHE::handle_prefetch()
 			    {
 			      if (cache_type == IS_L1D)
 				l1d_prefetcher_operate(PQ.entry[index].full_addr, PQ.entry[index].ip, 0, PREFETCH);
-			   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )
-           //else  if (cache_type == IS_L2C)
+			   else  if (cache_type == IS_L2C && exist(RQ.entry[index].ip)!=-1 )              //----for critical addresses
+           //else  if (cache_type == IS_L2C)                                                  //----for all addresses 
 				PQ.entry[index].pf_metadata = l2c_prefetcher_operate(PQ.entry[index].address<<LOG2_BLOCK_SIZE, PQ.entry[index].ip, 0, PREFETCH, PQ.entry[index].pf_metadata);
 			    }
 			  
